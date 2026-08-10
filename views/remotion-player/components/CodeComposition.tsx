@@ -60,7 +60,7 @@ function setPreviewStaticBase(projectId?: string): void {
   if (projectId) {
     root.remotion_staticBase = `${serverBaseUrl()}/project-assets/${encodeURIComponent(projectId)}`;
   } else {
-    delete root.remotion_staticBase;
+    Reflect.deleteProperty(root, "remotion_staticBase");
   }
 }
 
