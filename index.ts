@@ -1,15 +1,14 @@
 import {MCPServer} from "mcp-use";
 import {z} from "zod";
 import fs from "node:fs/promises";
-import {createReadStream} from "node:fs";
 import {createRequire} from "node:module";
-import {Readable} from "node:stream";
 import {getCapabilityReport} from "./capabilities.js";
 import {compileProjectBundle, normalizeVirtualPath} from "./compiler.js";
 import {projectStore} from "./project-store.js";
 import {assetStore, normalizeAssetPath} from "./asset-store.js";
 import {getOutput, outputDirectory, outputUrl, registerOutput} from "./output-store.js";
 import {prepareRenderProject, renderProjectStills, renderProjectVideo} from "./render-executor.js";
+import {serveFile} from "./file-response.js";
 import * as Rules from "./rules/index.js";
 import {DEFAULT_META, compileAndRespondWithProject, failProject, formatZodIssues, getSessionProject, sessionIdFromContext} from "./utils.js";
 
@@ -82,9 +81,9 @@ export const renderStillsTool=server.tool({name:"render_stills",description:"Ren
 export const renderVideoTool=server.tool({name:"render_video",description:"Render real H.264/H.265/VP8/VP9/ProRes media.",inputSchema:z.object({codec:z.enum(["h264","h265","vp8","vp9","prores"]).optional().default("h264"),crf:z.number().min(0).max(63).optional(),concurrency:z.union([z.number().positive(),z.string()]).optional()})},async({codec,crf,concurrency},ctx)=>{const p=await current(ctx);const r=await renderProjectVideo(p,outputDirectory(),{codec,crf,concurrency});const o=await registerOutput(r.outputPath,r.contentType);return{content:[{type:"text" as const,text:`Rendered ${codec} GL=${r.gl??"default"}: ${outputUrl(o)}`}],structuredContent:{gl:r.gl??"default",outputId:o.id,fileName:o.fileName,contentType:o.contentType,url:outputUrl(o)}};});
 export const resetProject=server.tool({name:"reset_project",description:"Destructively reset current project and assets."},async(_p,ctx)=>{const id=sessionIdFromContext(ctx);const p=await getSessionProject(id);await projectStore.delete(id);if(p)await assetStore.purgeProject(p.projectId);return{content:[{type:"text" as const,text:"Project reset."}]};});
 
-server.get("/project-assets/:projectId/*",async c=>{try{const a=await assetStore.get(c.req.param("projectId"),c.req.param("*") ?? "");if(!a)return c.text("Not found",404);return new Response(Readable.toWeb(createReadStream(a.filePath)) as ReadableStream,{headers:{"Content-Type":a.contentType,"Content-Length":String(a.size),ETag:`\"${a.sha256}\"`,"Cache-Control":"private, max-age=3600",...CROSS_ORIGIN_HEADERS}});}catch(e){return c.text((e as Error).message,400);}});
+server.get("/project-assets/:projectId/*",async c=>{try{const a=await assetStore.get(c.req.param("projectId"),c.req.param("*") ?? "");if(!a)return c.text("Not found",404);return serveFile(a.filePath,{contentType:a.contentType,size:a.size,etag:`\"${a.sha256}\"`,cacheControl:"private, max-age=3600",rangeHeader:c.req.header("Range")});}catch(e){return c.text((e as Error).message,400);}});
 server.get("/canvaskit.js",async c=>c.body(new Uint8Array(await fs.readFile(CANVASKIT_JS)),200,{"Content-Type":"text/javascript; charset=utf-8","Cache-Control":"public, max-age=31536000, immutable",...CROSS_ORIGIN_HEADERS}));
 server.get("/canvaskit.wasm",async c=>c.body(new Uint8Array(await fs.readFile(CANVASKIT_WASM)),200,{"Content-Type":"application/wasm","Cache-Control":"public, max-age=31536000, immutable",...CROSS_ORIGIN_HEADERS}));
-server.get("/renders/:id/:filename",async c=>{const o=getOutput(c.req.param("id"));if(!o)return c.text("Not found",404);try{return c.body(new Uint8Array(await fs.readFile(o.filePath)),200,{"Content-Type":o.contentType,"Content-Disposition":`inline; filename=\"${o.fileName.replace(/\"/g,"")}\"`,"Cache-Control":"private, max-age=3600",...CROSS_ORIGIN_HEADERS});}catch{return c.text("Unavailable",404);}});
+server.get("/renders/:id/:filename",async c=>{const o=getOutput(c.req.param("id"));if(!o)return c.text("Not found",404);try{return serveFile(o.filePath,{contentType:o.contentType,cacheControl:"private, max-age=3600",disposition:`inline; filename=\"${o.fileName.replace(/\"/g,"")}\"`,rangeHeader:c.req.header("Range")});}catch{return c.text("Unavailable",404);}});
 server.get("/.well-known/openai-apps-challenge",c=>c.text("remotion-ultimate-mcp-app"));
 export default server;
