@@ -11,13 +11,13 @@ import {assetStore, normalizeAssetPath} from "./asset-store.js";
 import {getOutput, outputDirectory, outputUrl, registerOutput} from "./output-store.js";
 import {prepareRenderProject, renderProjectStills, renderProjectVideo} from "./render-executor.js";
 import * as Rules from "./rules/index.js";
-import {DEFAULT_META, compileAndRespondWithProject, failProject, formatZodIssues, getSessionProject, saveSessionProject, sessionIdFromContext} from "./utils.js";
+import {DEFAULT_META, compileAndRespondWithProject, failProject, formatZodIssues, getSessionProject, sessionIdFromContext} from "./utils.js";
 
 const require=createRequire(import.meta.url);
 const CANVASKIT_JS=require.resolve("canvaskit-wasm/bin/full/canvaskit.js");
 const CANVASKIT_WASM=require.resolve("canvaskit-wasm/bin/full/canvaskit.wasm");
 
-const server=new MCPServer({name:"remotion-ultimate-mcp",title:"Remotion Ultimate",version:"0.1.0",host:"0.0.0.0",description:"Remotion 4.0.507 live ChatGPT Player + shared-source full render runtime."});
+const server=new MCPServer({name:"remotion-ultimate-mcp",title:"Remotion Ultimate",version:"0.1.1",host:"0.0.0.0",description:"Remotion 4.0.507 live ChatGPT Player + shared-source full render runtime."});
 const text=(name:string,description:string,value:string)=>server.tool({name,description},async()=>({content:[{type:"text" as const,text:value}]}));
 
 export const readMe=text("read_me","IMPORTANT: Call FIRST for real Remotion work.",Rules.RULE_INDEX);
@@ -48,7 +48,7 @@ const videoOut=z.object({videoProject:z.string()});
 
 export const createVideo=server.tool({
  name:"create_video",description:"Create/patch the current multi-file project and mount/update its live Player.",inputSchema:createSchema,outputSchema:videoOut,
- view:{name:"remotion-player",description:"Interactive Remotion video player",prefersBorder:false,csp:{resourceDomains:["https://images.unsplash.com","https://picsum.photos"]}}
+ view:{name:"remotion-player",description:"Interactive Remotion video player",prefersBorder:false,csp:{resourceDomains:["https://images.unsplash.com","https://picsum.photos","https://fonts.googleapis.com","https://fonts.gstatic.com"]}}
 },async(raw:z.infer<typeof createSchema>,ctx)=>{
  const sessionId=sessionIdFromContext(ctx); let changed:Record<string,string>;
  try{const p=JSON.parse(raw.files);if(!p||typeof p!=="object"||Array.isArray(p))return failProject("files must be a JSON object");changed=p;}catch{return failProject("files must be valid JSON");}

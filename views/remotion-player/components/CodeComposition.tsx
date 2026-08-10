@@ -37,14 +37,31 @@ function ensureRuntimePackages(): void {
 ensureRuntimePackages();
 
 type RuntimeExports = { default?: unknown; calculateMetadata?: unknown };
-
 type PreviewRuntimeRequirements = { skia?: boolean };
+
+type McpWindow = Window & {
+  __mcpServerUrl?: string;
+  remotion_staticBase?: string;
+};
+
+function serverBaseUrl(): string {
+  const injected = (window as McpWindow).__mcpServerUrl;
+  if (typeof injected === "string" && injected.trim()) {
+    return injected.trim().replace(/\/$/, "");
+  }
+  return window.location.origin.replace(/\/$/, "");
+}
+
 let skiaLoadPromise: Promise<void> | null = null;
 let canvasKitScriptPromise: Promise<void> | null = null;
 
 function setPreviewStaticBase(projectId?: string): void {
-  const root = window as unknown as { remotion_staticBase?: string };
-  root.remotion_staticBase = projectId ? `/project-assets/${encodeURIComponent(projectId)}` : undefined;
+  const root = window as McpWindow;
+  if (projectId) {
+    root.remotion_staticBase = `${serverBaseUrl()}/project-assets/${encodeURIComponent(projectId)}`;
+  } else {
+    Reflect.deleteProperty(root, "remotion_staticBase");
+  }
 }
 
 function loadCanvasKitScript(): Promise<void> {
@@ -56,7 +73,7 @@ function loadCanvasKitScript(): Promise<void> {
       return;
     }
     const script = existing ?? document.createElement("script");
-    script.src = "/canvaskit.js";
+    script.src = `${serverBaseUrl()}/canvaskit.js`;
     script.async = true;
     script.dataset.remotionUltimateCanvaskit = "true";
     script.addEventListener("load", () => { script.dataset.loaded = "true"; resolve(); }, { once: true });
@@ -78,7 +95,7 @@ async function ensurePreviewRuntime(requirements?: PreviewRuntimeRequirements): 
     if (root.CanvasKit) return;
     if (typeof root.CanvasKitInit !== "function") throw new Error("CanvasKitInit was not exposed by the CanvasKit runtime.");
     root.CanvasKit = await root.CanvasKitInit({
-      locateFile: () => new URL("/canvaskit.wasm", window.location.origin).toString(),
+      locateFile: () => `${serverBaseUrl()}/canvaskit.wasm`,
     });
   })();
   await skiaLoadPromise;
