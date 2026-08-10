@@ -1,27 +1,14 @@
 {
-  "name": "remotion-ultimate-mcp-app",
-  "version": "0.1.0",
+  "name": "remotion-ultimate-portable",
+  "version": "4.0.507",
   "private": true,
   "type": "module",
-  "description": "Full Remotion 4.0.507 MCP App: ChatGPT live Player preview + full server-side render/runtime capability from Remotion Ultimate Portable.",
-  "license": "MIT",
+  "description": "Self-contained Linux x64 Remotion creative runtime",
   "engines": {
     "node": ">=24"
   },
-  "scripts": {
-    "build": "NODE_OPTIONS='--max-old-space-size=8192' mcp-use build",
-    "build:inline": "NODE_OPTIONS='--max-old-space-size=8192' mcp-use build --inline",
-    "dev": "npm run build:inline && mcp-use start --with-inspector",
-    "dev:hmr": "mcp-use dev",
-    "start": "mcp-use start",
-    "deploy": "mcp-use deploy",
-    "typecheck": "mcp-use typecheck",
-    "check:syntax": "node scripts/check-syntax.mjs"
-  },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.19.3",
-    "@paper-design/shaders-react": "^0.0.71",
-    "@posthog/mcp": "0.10.3",
     "@react-three/drei": "10.7.8",
     "@react-three/fiber": "9.7.0",
     "@react-three/postprocessing": "3.0.4",
@@ -65,21 +52,16 @@
     "@types/three": "0.185.4",
     "autoprefixer": "10.5.4",
     "cannon-es": "0.20.0",
-    "canvaskit-wasm": "0.40.0",
     "chart.js": "4.5.1",
     "d3": "7.9.0",
     "echarts": "6.1.0",
-    "esbuild": "^0.28.1",
     "lottie-web": "5.13.0",
     "lucide-react": "1.30.0",
     "maath": "0.10.8",
     "maplibre-gl": "6.2.0",
     "matter-js": "0.20.0",
-    "mcp-use": "^2.0.4",
     "mediabunny": "1.50.8",
-    "node-mocks-http": "^1.17.2",
     "postcss": "8.5.26",
-    "posthog-node": "5.47.7",
     "postprocessing": "6.39.4",
     "react": "19.2.8",
     "react-chartjs-2": "5.3.1",
@@ -93,14 +75,5 @@
     "three-stdlib": "2.36.1",
     "typescript": "5.9.2",
     "zod": "4.4.3"
-  },
-  "overrides": {
-    "@posthog/core": "1.46.5"
-  },
-  "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "^19.2.2",
-    "typescript": "5.9.2"
   }
 }

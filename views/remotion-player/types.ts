@@ -16,4 +16,7 @@ export type VideoProjectData = {
   defaultProps: Record<string, unknown>;
   inputProps: Record<string, unknown>;
   compileError?: string;
+  revision?: number;
+  projectId?: string;
+  runtimeRequirements?: { skia?: boolean };
 };

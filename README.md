@@ -1,197 +1,101 @@
-<p align="center">
-  <a href="https://github.com/mcp-use/remotion-mcp-app/releases/download/v1.0.0/ClaudeRemotionDemo.mp4">
-    <img src="assets/demo-claude.gif" alt="Remotion MCP App Demo" width="100%"/>
-  </a>
-</p>
+# Remotion Ultimate MCP App
 
-# Remotion MCP App
+A shared-source Remotion 4.0.507 MCP App that combines:
 
-An [MCP App](https://mcp-use.com) for AI-powered video creation. It combines an MCP server with an interactive View — the model writes React/[Remotion](https://remotion.dev) code, the server compiles it in real-time, and a live video player renders the result directly inside the chat.
+- the upstream `mcp-use/remotion-mcp-app` conversation workflow and in-place ChatGPT Player preview;
+- the full creative/runtime dependency baseline verified from Remotion Ultimate Portable 4.0.507;
+- a real `@remotion/bundler` + `@remotion/renderer` final render executor;
+- persistent project revisions and binary asset storage.
 
-Unlike a standard MCP server that only returns text, an **MCP App** bundles a full UI View alongside its tools. The Remotion Player View renders inline in any compatible client (ChatGPT, Claude, or custom apps built with [mcp-use](https://mcp-use.com)), giving the model a visual canvas it can iterate on.
+## Core invariant
 
-## Try it now
+There is one project source of truth and two executors:
 
-Connect to the hosted instance:
-
-```
-https://still-feather-l5mwy.run.mcp-use.com/mcp
-```
-
-### Setup on ChatGPT
-
-1. Open **Settings** > **Apps and Connectors** > **Advanced Settings** and enable **Developer Mode**
-2. Go to **Connectors** > **Create**, name it "Remotion", paste the URL above
-3. In a new chat, click **+** > **More** and select the Remotion connector
-
-> Requires ChatGPT Pro, Team, Enterprise, or Edu. [Full guide](https://developers.openai.com/apps-sdk/deploy/connect-chatgpt/)
-
-### Setup on Claude
-
-1. Open **Settings** > **Connectors** > **Add custom connector**
-2. Paste the URL above and save
-3. The Remotion tools will be available in new conversations
-
-> Requires Claude Pro, Max, Team, or Enterprise. [Full guide](https://support.claude.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp)
-
-## Demos
-
-### ChatGPT + Remotion MCP App
-
-[![OpenAI demo](assets/demo-openai.gif)](https://github.com/mcp-use/remotion-mcp-app/releases/download/v1.0.0/openairemotion.mp4)
-
-### Claude + Remotion MCP App
-
-[![Claude demo](assets/demo-claude.gif)](https://github.com/mcp-use/remotion-mcp-app/releases/download/v1.0.0/ClaudeRemotionDemo.mp4)
-
-> Click the previews above to watch the full demos.
-
-## How it works
-
-This is an **MCP App** — an MCP server paired with a UI View. The two pieces work together:
-
-1. **MCP Server** -- exposes `create_video` tool + rule tools for teaching Remotion patterns
-2. **View** -- a Remotion Player that renders inline in the chat and receives compiled bundles from the server
-
-The flow:
-
-1. The model calls `create_video` with React/Remotion source files
-2. The server compiles the project with esbuild (sub-second)
-3. The compiled bundle is sent back as `structuredContent`, and the View renders it as a playable video
-4. For edits, the mounted View exposes `update_video`; it sends only changed files through the server compiler and swaps the player in place
-
-```
-Model                     MCP App (Server + View)
-  |                          |
-  |-- create_video({files}) ->|
-  |                          |-- esbuild compile
-  |<- structuredContent -----|
-  |                          |-- View renders video inline
-  |                          |
-  |-- update_video({edits}) ->|  (View tool)
-  |                          |-- create_video merges + recompiles
-  |                          |-- existing View swaps the player in place
+```text
+ChatGPT
+  -> Project Store
+       -> Preview Executor -> esbuild -> @remotion/player in the conversation
+       -> Render Executor  -> @remotion/bundler -> @remotion/renderer -> PNG / media
 ```
 
-### Single tool design
+Preview and render never maintain separate source trees.
 
-The server exposes one model-visible tool, `create_video`, for the initial composition. Once its View is mounted, the View exposes an ephemeral `update_video` tool. That tool reuses the server compiler, merges only the changed files with the current session project, and replaces the mounted player without creating another View result.
+## Main tools
 
-### Rule tools
+Creation and iteration:
 
-The server includes teaching tools derived from the [remotion-best-practices](https://github.com/remotion-dev/skills) skill that the model can call to learn Remotion patterns:
+- `read_me`
+- `get_capabilities`
+- `create_video`
+- View-only `update_video` for in-place Player updates
 
-| Tool | Topic |
-|------|-------|
-| `rule_react_code` | Project structure, imports, entry file contract |
-| `rule_remotion_animations` | `useCurrentFrame`, frame-driven animation |
-| `rule_remotion_timing` | `interpolate`, `spring`, `Easing` configs |
-| `rule_remotion_sequencing` | `Sequence`, scene management, duration |
-| `rule_remotion_transitions` | `TransitionSeries`, fade, slide, wipe |
-| `rule_remotion_text_animations` | Typewriter effect, word highlighting |
-| `rule_remotion_trimming` | Trimming with negative `Sequence` from |
+Project source:
 
-### View (the "App" part)
+- `list_project_files`
+- `read_project_file`
+- `write_project_file`
+- `replace_project_file`
+- `delete_project_file`
+- `validate_project`
+- `list_compositions`
 
-The Remotion Player View is what makes this an MCP App rather than a plain MCP server. It runs inside the chat interface and features:
+Assets:
 
-- Live video playback with controls
-- Animated loading state with shader gradient while the model writes code
-- Editing overlay (blur + gradient) when updating an existing video
-- Ephemeral `update_video` View tool for in-place agent edits
-- Fullscreen mode
-- Error display with compilation error details
+- `upload_asset`
+- `list_assets`
+- `delete_asset`
 
-## Local development
+Use normal Remotion `staticFile("assets/name.ext")` in source. The Preview Executor routes it to the project Asset Store; the Render Executor materializes the same asset into the Remotion public directory. The source code is unchanged between executors.
 
-### Prerequisites
+Rendering:
 
-- Node.js 22.22.2+
-- npm or pnpm
+- `render_still`
+- `render_stills`
+- `render_video`
 
-### Setup
+## Graphics
+
+The app includes the Portable creative stack, including Three.js / React Three Fiber / Drei, `@remotion/three`, Skia, Effects, Shapes, Paths, Noise, Motion Blur, media/captions, charts, maps and physics libraries.
+
+For real rendering, graphics backend selection is runtime-tested. TRUE 3D is never silently replaced with CSS pseudo-3D. If no GL backend can actually produce the requested result, the render fails with diagnostics instead of changing the visual dimension.
+
+Skia uses `enableSkia()` in the Render Executor and loads CanvasKit before registering the user entry. The Preview Executor serves its pinned CanvasKit JS/WASM runtime before evaluating a Skia project bundle.
+
+## Environment
+
+Optional persistence / output configuration:
+
+```text
+REMOTION_PROJECT_STORE_DIR=/persistent/projects
+REMOTION_ASSET_STORE_DIR=/persistent/assets
+REMOTION_OUTPUT_DIR=/persistent/outputs
+REMOTION_PUBLIC_BASE_URL=https://your-app.example
+```
+
+Rendering configuration:
+
+```text
+REMOTION_BROWSER_EXECUTABLE=/path/to/chrome
+REMOTION_CHROME_MODE=chrome-for-testing
+REMOTION_GL=angle-egl
+REMOTION_WORK_DIR=/tmp/remotion-work
+REMOTION_MAX_ASSET_BYTES=268435456
+```
+
+If `REMOTION_GL` is not fixed and the project needs Three/R3F or Skia, the Render Executor can try its configured graphics fallback sequence and reports the backend that actually succeeded.
+
+## Development
 
 ```bash
-git clone https://github.com/mcp-use/remotion-mcp-app.git
-cd remotion-mcp-app
 npm install
+npm run check:syntax
 npm run dev
 ```
 
-`npm run dev` builds the View inline before opening the embedded Inspector. This keeps the v2 View compatible with the Inspector sandbox, so the animated gradient loading state mounts instead of getting stuck on the host's fallback `Compiling...` spinner. Use `npm run dev:hmr` when testing outside that embedded sandbox and Vite hot reload is more useful.
+For a production ChatGPT test, deploy the MCP App and add its MCP endpoint to ChatGPT, then call `read_me` followed by `create_video`.
 
-The server starts at `http://localhost:3000/mcp`.
+## Provenance
 
-### Connect a client
+The app extends the MIT-licensed `mcp-use/remotion-mcp-app` architecture. See `docs/UPSTREAM.md`.
 
-Point any MCP client at `http://localhost:3000/mcp`. For example with [mcp-use](https://mcp-use.com):
-
-```json
-{
-  "mcpServers": {
-    "remotion": {
-      "url": "http://localhost:3000/mcp"
-    }
-  }
-}
-```
-
-### Build and deploy
-
-```bash
-npm run build
-npm run deploy
-```
-
-## Project structure
-
-```
-index.ts                     -- MCP server, tool definitions, handler
-utils.ts                     -- esbuild compilation, session state, response helpers
-types.ts                     -- Shared types (VideoProjectData, VideoMeta)
-rules/                       -- Remotion teaching content served by rule tools
-views/remotion-player/       -- MCP App View (React + Remotion Player)
-  view.tsx                   -- Main View component
-  types.ts                   -- Browser-only View types and runtime constants
-  components/
-    CodeComposition.tsx      -- CSP-safe blob module compiler + runtime shim
-```
-
-## Tool schema
-
-```typescript
-create_video({
-  files: string,            // REQUIRED -- JSON string of {path: code}
-  entryFile?: string,       // Default: "/src/Video.tsx"
-  title?: string,
-  durationInFrames?: number, // Default: 150
-  fps?: number,             // Default: 30
-  width?: number,           // Default: 1920
-  height?: number,          // Default: 1080
-})
-```
-
-The `files` parameter is a JSON string mapping virtual file paths to source code:
-
-```json
-{
-  "/src/Video.tsx": "import {AbsoluteFill} from \"remotion\";\nexport default function Video() { return <AbsoluteFill />; }"
-}
-```
-
-## Session behavior
-
-- ChatGPT conversations maintain isolated project state; other clients fall back to caller or transport identity
-- Calling `create_video` merges new files with the previous project
-- Metadata (title, fps, dimensions) carries forward unless overridden
-- Sessions are capped at 250 concurrent projects with LRU eviction
-
-## License
-
-MIT -- see [LICENSE](LICENSE) for details.
-
-Note: [Remotion](https://remotion.dev) is a dependency with its own license. Free for individuals and companies with up to 3 employees. Larger organizations need a [company license](https://www.remotion.pro/license).
-
----
-
-Built with [mcp-use](https://mcp-use.com) and [Remotion](https://remotion.dev). Rule tools adapted from the [remotion-best-practices](https://github.com/remotion-dev/skills) skill by Remotion.
+The Remotion dependency stack has its own licensing terms; review Remotion licensing before operating this as a hosted automation service.

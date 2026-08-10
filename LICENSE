@@ -22,8 +22,5 @@ SOFTWARE.
 
 ---
 
-Note: This license covers the MCP server code in this repository.
-Remotion (used as a dependency) has its own license:
-  - Free for individuals and companies with up to 3 employees
-  - Company license required for larger organizations
-  - See: https://github.com/remotion-dev/remotion/blob/main/LICENSE.md
+This derivative preserves the upstream mcp-use/remotion-mcp-app MIT license.
+Remotion is a dependency and has its own license: https://github.com/remotion-dev/remotion/blob/main/LICENSE.md

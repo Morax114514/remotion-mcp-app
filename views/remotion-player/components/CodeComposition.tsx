@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import * as ReactModule from "react";
 import * as ReactJsxRuntimeModule from "react/jsx-runtime";
 import * as ReactJsxDevRuntimeModule from "react/jsx-dev-runtime";
@@ -27,46 +27,87 @@ const runtimePackages: Record<string, Record<string, unknown>> = {
 function ensureRuntimePackages(): void {
   const root = globalThis as Record<string, unknown>;
   const existing = root[RUNTIME_PACKAGE_GLOBAL];
-
   if (existing && typeof existing === "object") {
     Object.assign(existing as Record<string, unknown>, runtimePackages);
     return;
   }
-
   root[RUNTIME_PACKAGE_GLOBAL] = runtimePackages;
 }
 
 ensureRuntimePackages();
 
-type RuntimeExports = {
-  default?: unknown;
-  calculateMetadata?: unknown;
-};
+type RuntimeExports = { default?: unknown; calculateMetadata?: unknown };
 
-export async function compileBundle(bundleCode: string): Promise<CompiledBundle | { error: string }> {
+type PreviewRuntimeRequirements = { skia?: boolean };
+let skiaLoadPromise: Promise<void> | null = null;
+let canvasKitScriptPromise: Promise<void> | null = null;
+
+function setPreviewStaticBase(projectId?: string): void {
+  const root = window as unknown as { remotion_staticBase?: string };
+  root.remotion_staticBase = projectId ? `/project-assets/${encodeURIComponent(projectId)}` : undefined;
+}
+
+function loadCanvasKitScript(): Promise<void> {
+  if (canvasKitScriptPromise) return canvasKitScriptPromise;
+  canvasKitScriptPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-remotion-ultimate-canvaskit="true"]');
+    if (existing?.dataset.loaded === "true") {
+      resolve();
+      return;
+    }
+    const script = existing ?? document.createElement("script");
+    script.src = "/canvaskit.js";
+    script.async = true;
+    script.dataset.remotionUltimateCanvaskit = "true";
+    script.addEventListener("load", () => { script.dataset.loaded = "true"; resolve(); }, { once: true });
+    script.addEventListener("error", () => reject(new Error("Could not load CanvasKit runtime.")), { once: true });
+    if (!existing) document.head.appendChild(script);
+  });
+  return canvasKitScriptPromise;
+}
+
+async function ensurePreviewRuntime(requirements?: PreviewRuntimeRequirements): Promise<void> {
+  if (!requirements?.skia) return;
+  if (skiaLoadPromise) return skiaLoadPromise;
+  skiaLoadPromise = (async () => {
+    await loadCanvasKitScript();
+    const root = globalThis as unknown as {
+      CanvasKit?: unknown;
+      CanvasKitInit?: (opts?: { locateFile?: (file: string) => string }) => Promise<unknown>;
+    };
+    if (root.CanvasKit) return;
+    if (typeof root.CanvasKitInit !== "function") throw new Error("CanvasKitInit was not exposed by the CanvasKit runtime.");
+    root.CanvasKit = await root.CanvasKitInit({
+      locateFile: () => new URL("/canvaskit.wasm", window.location.origin).toString(),
+    });
+  })();
+  await skiaLoadPromise;
+}
+
+export async function compileBundle(
+  bundleCode: string,
+  runtimeRequirements?: PreviewRuntimeRequirements,
+  projectId?: string
+): Promise<CompiledBundle | { error: string }> {
+  ensureRuntimePackages();
+  setPreviewStaticBase(projectId);
+  await ensurePreviewRuntime(runtimeRequirements);
   const moduleSource = `${bundleCode}\nexport default typeof ${RUNTIME_BUNDLE_GLOBAL} !== \"undefined\" ? ${RUNTIME_BUNDLE_GLOBAL} : null;`;
   const moduleUrl = URL.createObjectURL(new Blob([moduleSource], { type: "text/javascript" }));
-
   try {
     const imported = await import(/* @vite-ignore */ moduleUrl);
     const exports = imported.default as RuntimeExports | null;
-
     if (!exports || typeof exports !== "object") {
       return { error: "Compilation error: bundle did not return exports." };
     }
-
     if (typeof exports.default !== "function") {
-      return {
-        error:
-          "Compilation error: entry module must export a default React component (export default function ...).",
-      };
+      return { error: "Compilation error: entry module must default-export a React component." };
     }
-
     return {
       component: exports.default as React.ComponentType<Record<string, unknown>>,
       calculateMetadata:
         typeof exports.calculateMetadata === "function"
-          ? (exports.calculateMetadata as (input: RuntimeMetadataInput) => unknown | Promise<unknown>)
+          ? exports.calculateMetadata as (input: RuntimeMetadataInput) => unknown | Promise<unknown>
           : undefined,
     };
   } catch (error) {
@@ -75,32 +116,3 @@ export async function compileBundle(bundleCode: string): Promise<CompiledBundle 
     URL.revokeObjectURL(moduleUrl);
   }
 }
-
-export const CodeComposition: React.FC<{
-  bundle: string;
-  componentProps: Record<string, unknown>;
-}> = ({ bundle, componentProps }) => {
-  const [compiled, setCompiled] = useState<CompiledBundle | { error: string } | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    setCompiled(null);
-    void compileBundle(bundle).then((result) => {
-      if (active) setCompiled(result);
-    });
-    return () => {
-      active = false;
-    };
-  }, [bundle]);
-
-  if (!compiled) {
-    return null;
-  }
-
-  if ("error" in compiled) {
-    throw new Error(compiled.error);
-  }
-
-  const Component = compiled.component;
-  return <Component {...componentProps} />;
-};

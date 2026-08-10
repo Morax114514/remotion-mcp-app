@@ -1,6 +1,9 @@
-node_modules
-dist
-.mcp-use
+node_modules/
+dist/
+.mcp-use/
 .env
-*.log
-*.png
+.env.*
+outputs/
+project-store/
+asset-store/
+.DS_Store
