@@ -11,13 +11,13 @@ import {assetStore, normalizeAssetPath} from "./asset-store.js";
 import {getOutput, outputDirectory, outputUrl, registerOutput} from "./output-store.js";
 import {prepareRenderProject, renderProjectStills, renderProjectVideo} from "./render-executor.js";
 import * as Rules from "./rules/index.js";
-import {DEFAULT_META, compileAndRespondWithProject, failProject, formatZodIssues, getSessionProject, saveSessionProject, sessionIdFromContext} from "./utils.js";
+import {DEFAULT_META, compileAndRespondWithProject, failProject, formatZodIssues, getSessionProject, sessionIdFromContext} from "./utils.js";
 
 const require=createRequire(import.meta.url);
 const CANVASKIT_JS=require.resolve("canvaskit-wasm/bin/full/canvaskit.js");
 const CANVASKIT_WASM=require.resolve("canvaskit-wasm/bin/full/canvaskit.wasm");
 
-const server=new MCPServer({name:"remotion-ultimate-mcp",title:"Remotion Ultimate",version:"0.1.1",host:"0.0.0.0",baseUrl:process.env.MCP_URL||"http://localhost:3000",description:"Remotion 4.0.507 live ChatGPT Player + shared-source full render runtime."});
+const server=new MCPServer({name:"remotion-ultimate-mcp",title:"Remotion Ultimate",version:"0.1.1",host:"0.0.0.0",description:"Remotion 4.0.507 live ChatGPT Player + shared-source full render runtime."});
 const text=(name:string,description:string,value:string)=>server.tool({name,description},async()=>({content:[{type:"text" as const,text:value}]}));
 
 export const readMe=text("read_me","IMPORTANT: Call FIRST for real Remotion work.",Rules.RULE_INDEX);
