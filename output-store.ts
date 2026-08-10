@@ -44,6 +44,6 @@ export function getOutput(id: string): OutputRecord | null {
 
 export function outputUrl(record: OutputRecord): string {
   const relative = `/renders/${record.id}/${encodeURIComponent(record.fileName)}`;
-  const base = process.env.REMOTION_PUBLIC_BASE_URL?.replace(/\/$/, "");
+  const base = (process.env.REMOTION_PUBLIC_BASE_URL ?? process.env.MCP_URL)?.replace(/\/$/, "");
   return base ? `${base}${relative}` : relative;
 }
