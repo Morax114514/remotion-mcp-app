@@ -1,15 +1,5 @@
-import React, {
-  useMemo,
-  useRef,
-  useState,
-  useEffect,
-  useCallback,
-  Component,
-  type ErrorInfo,
-  type ReactNode,
-} from "react";
+import React, { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import {
-  ThemeProvider,
   useCallTool,
   useDisplayMode,
   useSendFollowUp,
@@ -17,95 +7,17 @@ import {
   useViewTheme,
   useViewTool,
 } from "mcp-use/react";
-import { Player, type PlayerRef } from "@remotion/player";
+import { Player } from "@remotion/player";
 import { z } from "zod";
 import { compileBundle, type CompiledBundle } from "./components/CodeComposition.js";
 import type { VideoMeta, VideoProjectData } from "./types.js";
-
-import { GrainGradient } from "@paper-design/shaders-react";
-
-// ---------------------------------------------------------------------------
-// Error boundaries
-// ---------------------------------------------------------------------------
-
-class WidgetErrorBoundary extends Component<
-  { children: ReactNode },
-  { error: string | null }
-> {
-  state = { error: null as string | null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[remotion-player] top-level error:", error.message, info.componentStack);
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{ padding: 16, color: "#ff6b6b", fontFamily: "monospace", fontSize: 12 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Widget Error</div>
-          <div style={{ whiteSpace: "pre-wrap" }}>{this.state.error}</div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-class PlayerErrorBoundary extends Component<
-  { children: ReactNode; onError?: (msg: string) => void; dark: boolean },
-  { error: string | null }
-> {
-  state = { error: null as string | null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    this.props.onError?.(error.message);
-    console.error("[remotion-player] player error:", error.message, info.componentStack);
-  }
-
-  render() {
-    if (this.state.error) {
-      const dark = this.props.dark;
-      return (
-        <div
-          style={{
-            padding: 16,
-            background: dark ? "#1c1c1c" : "#f5f5f5",
-            borderRadius: 8,
-            fontFamily: "system-ui, sans-serif",
-            color: dark ? "#ff6b6b" : "#dc3545",
-            fontSize: 13,
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Error</div>
-          <div style={{ opacity: 0.8, fontSize: 12, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-            {this.state.error}
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function positiveNumberOrFallback(value: unknown, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
-  return fallback;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function toPropsObject(value: unknown): Record<string, unknown> {
@@ -113,42 +25,33 @@ function toPropsObject(value: unknown): Record<string, unknown> {
 }
 
 function parseVideoProject(input: Record<string, unknown> | null): VideoProjectData | null {
-  if (!input) return null;
-  const raw = input.videoProject;
-  if (typeof raw !== "string") return null;
+  if (!input || typeof input.videoProject !== "string") return null;
   try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!isRecord(parsed)) return null;
+    const parsed = JSON.parse(input.videoProject) as Record<string, unknown>;
+    if (!isRecord(parsed) || !isRecord(parsed.meta) || typeof parsed.bundle !== "string") return null;
     const meta = parsed.meta;
-    const bundle = parsed.bundle;
-    if (!isRecord(meta) || typeof bundle !== "string" || bundle.trim().length === 0) return null;
     return {
       meta: {
-        title: typeof meta.title === "string" && meta.title.trim().length > 0 ? meta.title : "Untitled",
-        compositionId: typeof meta.compositionId === "string" && meta.compositionId.trim().length > 0 ? meta.compositionId : "Main",
+        title: typeof meta.title === "string" ? meta.title : "Untitled",
+        compositionId: typeof meta.compositionId === "string" ? meta.compositionId : "Main",
         width: positiveNumberOrFallback(meta.width, 1920),
         height: positiveNumberOrFallback(meta.height, 1080),
         fps: positiveNumberOrFallback(meta.fps, 30),
         durationInFrames: positiveNumberOrFallback(meta.durationInFrames, 150),
       },
-      bundle,
+      bundle: parsed.bundle,
       defaultProps: toPropsObject(parsed.defaultProps),
       inputProps: toPropsObject(parsed.inputProps),
-      compileError:
-        typeof parsed.compileError === "string" && parsed.compileError.trim().length > 0
-          ? parsed.compileError
-          : undefined,
+      compileError: typeof parsed.compileError === "string" ? parsed.compileError : undefined,
+      revision: typeof parsed.revision === "number" ? parsed.revision : undefined,
+      projectId: typeof parsed.projectId === "string" ? parsed.projectId : undefined,
+      runtimeRequirements: isRecord(parsed.runtimeRequirements)
+        ? { skia: parsed.runtimeRequirements.skia === true }
+        : undefined,
     };
   } catch {
     return null;
   }
-}
-
-function mergeProps(
-  defaultProps: Record<string, unknown>,
-  inputProps: Record<string, unknown>
-): Record<string, unknown> {
-  return { ...defaultProps, ...inputProps };
 }
 
 function readMetadataOverrides(overrides: Record<string, unknown>, fallback: VideoMeta): VideoMeta {
@@ -161,647 +64,223 @@ function readMetadataOverrides(overrides: Record<string, unknown>, fallback: Vid
   };
 }
 
-// ---------------------------------------------------------------------------
-// Loading words
-// ---------------------------------------------------------------------------
-
-const LOADING_WORDS = [
-  "Storyboarding", "Keyframing", "Colorgrading", "Montaging", "Clipjuggling",
-  "Renderwrangling", "Timeline-taming", "Scene-stitching", "Framebuffing",
-  "Beziering", "Rotoscoping", "Whooshing", "Boom-micing", "Greenscreening",
-  "Lensfiddling", "Foleying", "Pixel-peeping", "Shot-sweetening",
-  "Captionifying", "Transition-wizarding", "Slo-moing", "B-rolling",
-  "Audio-polishing", "Stabilizing", "Export-spelunking",
-  "Render-re-rendering", "Compiling-and-smiling", "Cinema-cooking",
-];
-
-function useLoadingWord(active: boolean) {
-  const [index, setIndex] = useState(0);
-  const [visible, setVisible] = useState(true);
-
-  useEffect(() => {
-    if (!active) {
-      setVisible(true);
-      return;
-    }
-    const rotateMs = 2500;
-    const fadeMs = 220;
-    let timeout: number | null = null;
-    const interval = window.setInterval(() => {
-      setVisible(false);
-      timeout = window.setTimeout(() => {
-        setIndex((prev) => (prev + 1) % LOADING_WORDS.length);
-        setVisible(true);
-      }, fadeMs);
-    }, rotateMs);
-    return () => {
-      window.clearInterval(interval);
-      if (timeout !== null) window.clearTimeout(timeout);
-    };
-  }, [active]);
-
-  return { word: LOADING_WORDS[index] + "...", visible };
+class ErrorBoundary extends Component<
+  { children: ReactNode; onError?: (message: string) => void },
+  { error: string | null }
+> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(error: Error) { return { error: error.message }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    this.props.onError?.(error.message);
+    console.error("[remotion-ultimate] player error", error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) return <ErrorPanel message={this.state.error} />;
+    return this.props.children;
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Shader background (safe — renders fallback gradient on failure)
-// ---------------------------------------------------------------------------
-
-function ShaderBackground({ style }: { style?: React.CSSProperties }) {
+function ErrorPanel({ message, onFix }: { message: string; onFix?: () => void }) {
   return (
-    <GrainGradient
-      width="100%"
-      height="100%"
-      colors={["#7300ff", "#eba8ff", "#00bfff", "#2b00ff", "#33cc99", "#3399cc", "#3333cc"]}
-      colorBack="#00000000"
-      softness={1}
-      intensity={1}
-      noise={0.0}
-      shape="corners"
-      speed={2}
-      scale={1.8}
-      style={style}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Loading state
-// ---------------------------------------------------------------------------
-
-function LoadingView({
-  word,
-  visible,
-  dark,
-}: {
-  word: string;
-  visible: boolean;
-  dark: boolean;
-}) {
-  return (
-    <div
-      style={{
-        position: "relative",
-        height: 260,
-        minHeight: 260,
-        border: `1px solid ${dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"}`,
-        borderRadius: 12,
-        boxSizing: "border-box",
-        overflow: "hidden",
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <ShaderBackground style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-      <div
-        style={{
-          position: "relative",
-          zIndex: 1,
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: dark ? "#ffffff" : "#000000",
-          textAlign: "center",
-          padding: 24,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 16,
-            fontWeight: 500,
-            letterSpacing: 0.35,
-            lineHeight: 1,
-            opacity: visible ? 0.95 : 0,
-            transform: visible ? "translateY(0px) scale(1)" : "translateY(8px) scale(0.985)",
-            transition: "opacity 120ms ease, transform 120ms ease",
-          }}
-        >
-          {word}
-        </span>
-      </div>
+    <div style={{ padding: 16, borderRadius: 12, background: "#1c1c1c", color: "#ff8c8c", fontFamily: "system-ui" }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Remotion preview error</div>
+      <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.92 }}>{message}</pre>
+      {onFix ? (
+        <button onClick={onFix} style={{ marginTop: 12, border: 0, borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+          Ask ChatGPT to fix
+        </button>
+      ) : null}
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Empty state
-// ---------------------------------------------------------------------------
-
-function EmptyView({ dark }: { dark: boolean }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: 200,
-        background: dark ? "#141414" : "#fff",
-        border: `1px solid ${dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"}`,
-        borderRadius: 12,
-        boxSizing: "border-box",
-        fontFamily: "system-ui, sans-serif",
-        color: dark ? "#777" : "#888",
-        fontSize: 13,
-        textAlign: "center",
-        padding: 16,
-      }}
-    >
-      No video project data was returned. Check the tool output and call create_video or update_video again.
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Updating overlay
-// ---------------------------------------------------------------------------
-
-function EditingOverlay({ word, visible }: { word: string; visible: boolean }) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 10,
-        pointerEvents: "none",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
-        borderRadius: "inherit",
-      }}
-    >
-      {/* Blur layer over the video */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          backdropFilter: "blur(12px)",
-          WebkitBackdropFilter: "blur(12px)",
-          transition: "opacity 300ms ease",
-        }}
-      />
-      {/* Shader gradient on top */}
-      <ShaderBackground
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          opacity: 0.55,
-          mixBlendMode: "screen",
-        }}
-      />
-      {/* Loading word */}
-      <span
-        style={{
-          position: "relative",
-          zIndex: 1,
-          fontSize: 16,
-          fontWeight: 500,
-          letterSpacing: 0.35,
-          lineHeight: 1,
-          color: "#ffffff",
-          textShadow: "0 1px 8px rgba(0,0,0,0.5)",
-          opacity: visible ? 0.95 : 0,
-          transform: visible ? "translateY(0px) scale(1)" : "translateY(8px) scale(0.985)",
-          transition: "opacity 120ms ease, transform 120ms ease",
-        }}
-      >
-        {word}
-      </span>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Player view
-// ---------------------------------------------------------------------------
 
 const updateVideoSchema = z.object({
-  files: z.string().describe(
-    'JSON string containing only the changed files, for example {"/src/Video.tsx":"...updated code..."}'
-  ),
-  entryFile: z.string().optional().describe("Updated entry file path, if it changed"),
-  title: z.string().optional().describe("Updated title shown above the mounted video"),
-  durationInFrames: z.number().positive().optional().describe("Updated video duration in frames"),
-  fps: z.number().positive().optional().describe("Updated frames per second"),
-  width: z.number().positive().optional().describe("Updated composition width in pixels"),
-  height: z.number().positive().optional().describe("Updated composition height in pixels"),
+  files: z.string().describe('JSON string containing changed files, e.g. {"/src/Video.tsx":"..."}'),
+  deleteFiles: z.array(z.string()).optional(),
+  entryFile: z.string().optional(),
+  title: z.string().optional(),
+  compositionId: z.string().optional(),
+  durationInFrames: z.number().positive().optional(),
+  fps: z.number().positive().optional(),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional(),
+  defaultProps: z.record(z.string(), z.unknown()).optional(),
+  inputProps: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateVideoOutputSchema = z.object({
-  videoProject: z.string().describe("Serialized updated project mounted by the current View"),
+  videoProject: z.string(),
 });
-
-function PlayerView({
-  compiledProject,
-  compileError,
-  mergedProps,
-  meta,
-  dark,
-  isBusy,
-  isFullscreen,
-  canFullscreen,
-  onToggleFullscreen,
-  loadingWord,
-  loadingVisible,
-  onPlayerError,
-}: {
-  compiledProject: CompiledBundle | null;
-  compileError: string | null;
-  mergedProps: Record<string, unknown>;
-  meta: VideoMeta;
-  dark: boolean;
-  isBusy: boolean;
-  isFullscreen: boolean;
-  canFullscreen: boolean;
-  onToggleFullscreen: () => void;
-  loadingWord: string;
-  loadingVisible: boolean;
-  onPlayerError: (msg: string) => void;
-}) {
-  const ref = useRef<PlayerRef>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsNativeFullscreen(document.fullscreenElement === containerRef.current);
-    };
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
-
-  const handleFullscreen = useCallback(() => {
-    if (canFullscreen) {
-      onToggleFullscreen();
-      return;
-    }
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
-      return;
-    }
-    void containerRef.current?.requestFullscreen();
-  }, [canFullscreen, onToggleFullscreen]);
-
-  const fullscreenActive = isFullscreen || isNativeFullscreen;
-
-  if (compileError) {
-    return (
-      <div
-        ref={containerRef}
-        style={{
-          padding: 16,
-          background: dark ? "#1c1c1c" : "#f5f5f5",
-          border: `1px solid ${dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"}`,
-          borderRadius: 12,
-          boxSizing: "border-box",
-          fontFamily: "system-ui, sans-serif",
-          color: dark ? "#ff6b6b" : "#dc3545",
-          fontSize: 13,
-        }}
-      >
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>Compilation Error</div>
-        <div style={{ opacity: 0.8, fontSize: 12, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-          {compileError}
-        </div>
-      </div>
-    );
-  }
-
-  if (!compiledProject || "error" in compiledProject) {
-    return null;
-  }
-
-  return (
-    <PlayerErrorBoundary onError={onPlayerError} dark={dark}>
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          overflow: "hidden",
-          border: `1px solid ${dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)"}`,
-          borderRadius: 12,
-          boxSizing: "border-box",
-        }}
-      >
-        <Player
-          ref={ref}
-          component={compiledProject.component as any}
-          inputProps={mergedProps}
-          durationInFrames={meta.durationInFrames}
-          fps={meta.fps}
-          compositionWidth={meta.width}
-          compositionHeight={meta.height}
-          controls
-          autoPlay
-          loop
-          style={{ width: "100%", maxWidth: "100%", margin: 0 }}
-        />
-        {isBusy && <EditingOverlay word={loadingWord} visible={loadingVisible} />}
-        <button
-            type="button"
-            onClick={handleFullscreen}
-            aria-label={fullscreenActive ? "Exit fullscreen" : "Enter fullscreen"}
-            title={fullscreenActive ? "Exit fullscreen" : "Fullscreen"}
-            style={{
-              position: "absolute",
-              top: 10,
-              right: 10,
-              zIndex: 20,
-              width: 34,
-              height: 34,
-              padding: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              background: "rgba(0,0,0,0.48)",
-              border: "1px solid rgba(255,255,255,0.22)",
-              borderRadius: 8,
-              cursor: "pointer",
-              backdropFilter: "blur(8px)",
-              WebkitBackdropFilter: "blur(8px)",
-            }}
-          >
-            {fullscreenActive ? (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="6 2 6 6 2 6" />
-                <polyline points="10 14 10 10 14 10" />
-                <line x1="2" y1="2" x2="6" y2="6" />
-                <line x1="14" y1="14" x2="10" y2="10" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="10 2 14 2 14 6" />
-                <polyline points="6 14 2 14 2 10" />
-                <line x1="14" y1="2" x2="10" y2="6" />
-                <line x1="2" y1="14" x2="6" y2="10" />
-              </svg>
-            )}
-          </button>
-      </div>
-    </PlayerErrorBoundary>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main widget
-// ---------------------------------------------------------------------------
 
 function RemotionPlayerWidgetInner() {
   const view = useToolContext<"create_video">();
   const createVideo = useCallTool("create_video");
+  const sendFollowUp = useSendFollowUp();
   const theme = useViewTheme();
   const { displayMode, availableDisplayModes, requestDisplayMode } = useDisplayMode();
-  const sendFollowUpMessage = useSendFollowUp();
-
-  const prevRef = useRef<VideoProjectData | null>(null);
+  const dark = theme === "dark";
   const [viewOverride, setViewOverride] = useState<VideoProjectData | null>(null);
+  const previousData = useRef<VideoProjectData | null>(null);
   const [compiled, setCompiled] = useState<CompiledBundle | { error: string } | null>(null);
   const [isCompiling, setIsCompiling] = useState(false);
-  const dark = theme === "dark";
-  const canFullscreen = availableDisplayModes.includes("fullscreen");
-  const isFullscreen = canFullscreen && displayMode === "fullscreen";
-  const isPending = view.status === "pending";
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
 
-  // --- Parse project data ---
-  // The compiled video project comes from structuredContent, not tool input.
-  const rawVideoProject = useMemo(() => {
-    return view.status === "ready" ? view.toolOutput.videoProject : null;
-  }, [view]);
+  const rawVideoProject = view.status === "ready" ? view.toolOutput.videoProject : null;
+  const serverData = useMemo(
+    () => typeof rawVideoProject === "string" ? parseVideoProject({ videoProject: rawVideoProject }) : null,
+    [rawVideoProject]
+  );
 
-  const finalData = useMemo(() => {
-    if (isPending || !rawVideoProject) return null;
-    return parseVideoProject({ videoProject: rawVideoProject });
-  }, [isPending, rawVideoProject]);
-
-  useEffect(() => {
-    setViewOverride(null);
-  }, [rawVideoProject]);
-
-  const currentData = viewOverride ?? finalData;
-  const isBusy = isPending || createVideo.isPending || isCompiling;
-  const data = currentData || (isBusy ? prevRef.current : null);
-  const hasData = !!data;
-  const isLoading = !hasData && isBusy;
+  useEffect(() => setViewOverride(null), [rawVideoProject]);
+  const currentData = viewOverride ?? serverData;
+  const isBusy = view.status === "pending" || createVideo.isPending || isCompiling;
+  const data = currentData ?? (isBusy ? previousData.current : null);
+  useEffect(() => { if (currentData) previousData.current = currentData; }, [currentData]);
 
   useEffect(() => {
-    if (currentData) prevRef.current = currentData;
-  }, [currentData]);
+    const onFullscreenChange = () => setNativeFullscreen(document.fullscreenElement === playerContainerRef.current);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
 
   useViewTool(
     {
       name: "update_video",
       title: "Update video in place",
-      description:
-        "Update files or metadata for the video mounted in this View and replace it without rendering a new View",
+      description: "Patch the current Remotion project and replace this mounted Player without creating a new View.",
       inputSchema: updateVideoSchema,
       outputSchema: updateVideoOutputSchema,
-      enabled: hasData && !createVideo.isPending,
+      enabled: !!data && !createVideo.isPending,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (args) => {
       try {
         const result = await createVideo.callTool(args);
-        const videoProject = result.structuredContent?.videoProject;
-        if (typeof videoProject !== "string") {
-          return {
-            isError: true,
-            content: [{ type: "text", text: "The update did not return a video project." }],
-          };
-        }
-
-        const nextData = parseVideoProject({ videoProject });
-        if (!nextData) {
-          return {
-            isError: true,
-            content: [{ type: "text", text: "The updated video project could not be parsed." }],
-          };
-        }
-
-        prevRef.current = nextData;
-        setViewOverride(nextData);
+        const raw = result.structuredContent?.videoProject;
+        if (typeof raw !== "string") throw new Error("Update returned no videoProject.");
+        const next = parseVideoProject({ videoProject: raw });
+        if (!next) throw new Error("Updated videoProject could not be parsed.");
+        previousData.current = next;
+        setViewOverride(next);
+        setPlayerError(null);
         return result;
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Could not update the mounted video: ${(error as Error).message}`,
-            },
-          ],
-        };
+        return { isError: true, content: [{ type: "text", text: `Could not update video: ${(error as Error).message}` }] };
       }
     }
   );
 
-  // --- Loading word ---
-  const { word: loadingWord, visible: loadingVisible } = useLoadingWord(isBusy);
-
-  // --- Compile bundle ---
   useEffect(() => {
     let active = true;
     if (!data || data.compileError) {
       setCompiled(null);
       setIsCompiling(false);
-      return () => {
-        active = false;
-      };
+      return () => { active = false; };
     }
-
     setIsCompiling(true);
-    void compileBundle(data.bundle).then((result) => {
-      if (active) {
-        setCompiled(result);
-        setIsCompiling(false);
-      }
+    void compileBundle(data.bundle, data.runtimeRequirements, data.projectId).then((result) => {
+      if (!active) return;
+      setCompiled(result);
+      setIsCompiling(false);
     });
+    return () => { active = false; };
+  }, [data?.bundle, data?.compileError, data?.runtimeRequirements?.skia]);
 
-    return () => {
-      active = false;
-    };
-  }, [data?.bundle, data?.compileError]);
-
-  const compileError = data?.compileError ?? (compiled && "error" in compiled ? compiled.error : null);
-  const compiledProject = compiled && !("error" in compiled) ? compiled : null;
-
-  // --- Merge props ---
-  const mergedProps = useMemo(() => {
-    if (!data) return {};
-    return mergeProps(data.defaultProps, data.inputProps);
-  }, [data]);
-
-  // --- Resolve metadata (calculateMetadata) ---
+  const mergedProps = useMemo(() => data ? { ...data.defaultProps, ...data.inputProps } : {}, [data]);
   const [resolvedMeta, setResolvedMeta] = useState<VideoMeta | null>(null);
-
-  useEffect(() => {
-    if (!data) { setResolvedMeta(null); return; }
-    setResolvedMeta(data.meta);
-  }, [data?.bundle, data?.meta.title, data?.meta.compositionId, data?.meta.width, data?.meta.height, data?.meta.fps, data?.meta.durationInFrames]);
+  useEffect(() => { setResolvedMeta(data?.meta ?? null); }, [data?.meta, data?.bundle]);
 
   useEffect(() => {
     if (!data || !compiled || "error" in compiled || !compiled.calculateMetadata) return;
     const controller = new AbortController();
-    Promise.resolve(
-      compiled.calculateMetadata({
-        props: mergedProps,
-        defaultProps: data.defaultProps,
-        compositionId: data.meta.compositionId,
-        abortSignal: controller.signal,
-      })
-    )
-      .then((metadata) => {
-        if (controller.signal.aborted || !isRecord(metadata)) return;
+    Promise.resolve(compiled.calculateMetadata({
+      props: mergedProps,
+      defaultProps: data.defaultProps,
+      compositionId: data.meta.compositionId,
+      abortSignal: controller.signal,
+    })).then((metadata) => {
+      if (!controller.signal.aborted && isRecord(metadata)) {
         setResolvedMeta((current) => readMetadataOverrides(metadata, current ?? data.meta));
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
-        void sendFollowUpMessage({
-          prompt: `calculateMetadata() failed:\n\n\`${(error as Error).message}\`\n\nPlease fix the project and call create_video again.`,
-        }).catch(() => {});
-      });
+      }
+    }).catch((error) => {
+      if (!controller.signal.aborted) setPlayerError(`calculateMetadata: ${(error as Error).message}`);
+    });
     return () => controller.abort();
-  }, [compiled, data, mergedProps, sendFollowUpMessage]);
+  }, [compiled, data, mergedProps]);
 
-  // --- Send follow-up on compile error ---
-  useEffect(() => {
-    if (!compileError || data?.compileError) return;
-    void sendFollowUpMessage({
-      prompt: `The project had a compilation error:\n\n\`${compileError}\`\n\nPlease fix the files and call create_video again.`,
-    }).catch(() => {});
-  }, [compileError, sendFollowUpMessage]);
+  const compileError = data?.compileError ?? (compiled && "error" in compiled ? compiled.error : null) ?? playerError;
+  const compiledProject = compiled && !("error" in compiled) ? compiled : null;
+  const meta = resolvedMeta ?? data?.meta ?? null;
 
-  // --- Player error handler ---
-  const handlePlayerError = useCallback(
-    (msg: string) => {
-      void sendFollowUpMessage({
-        prompt: `The video had a runtime error:\n\n\`${msg}\`\n\nPlease fix the project and call create_video again.`,
-      }).catch(() => {});
-    },
-    [sendFollowUpMessage]
-  );
-
+  const canAppFullscreen = availableDisplayModes.includes("fullscreen");
+  const appFullscreen = canAppFullscreen && displayMode === "fullscreen";
+  const fullscreen = appFullscreen || nativeFullscreen;
+  const canNativeFullscreen = typeof document !== "undefined" && typeof document.documentElement?.requestFullscreen === "function";
   const toggleFullscreen = useCallback(() => {
-    requestDisplayMode({ mode: isFullscreen ? "inline" : "fullscreen" }).catch(() => {});
-  }, [isFullscreen, requestDisplayMode]);
+    if (canAppFullscreen) {
+      requestDisplayMode({ mode: appFullscreen ? "inline" : "fullscreen" });
+      return;
+    }
+    if (!canNativeFullscreen) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void playerContainerRef.current?.requestFullscreen();
+    }
+  }, [appFullscreen, canAppFullscreen, canNativeFullscreen, requestDisplayMode]);
 
-  const meta = resolvedMeta ?? data?.meta ?? { title: "Untitled", compositionId: "Main", width: 1920, height: 1080, fps: 30, durationInFrames: 150 };
+  const askFix = useCallback(() => {
+    if (!compileError) return;
+    sendFollowUp({ prompt: `Fix the current Remotion project preview error without changing the intended visual design:\n\n${compileError}` });
+  }, [compileError, sendFollowUp]);
 
-  if (view.status === "error") {
-    return <EmptyView dark={dark} />;
+  if (!data && isBusy) {
+    return <div style={{ height: 240, display: "grid", placeItems: "center", borderRadius: 12, background: dark ? "#111" : "#f4f4f4" }}>Compiling Remotion preview…</div>;
   }
-
-  // --- Loading state (no data yet, tool is running) ---
-  if (isLoading) {
-    return (
-      <LoadingView
-        word={loadingWord}
-        visible={loadingVisible}
-        dark={dark}
-      />
-    );
+  if (!data) {
+    return <div style={{ padding: 24, borderRadius: 12, background: dark ? "#111" : "#f4f4f4" }}>No video project data.</div>;
   }
+  if (compileError) return <ErrorPanel message={compileError} onFix={askFix} />;
+  if (!compiledProject || !meta) return <div style={{ height: 240, display: "grid", placeItems: "center" }}>Compiling…</div>;
 
-  // --- Empty state (no data, tool is done) ---
-  if (!hasData) {
-    return <EmptyView dark={dark} />;
-  }
-
-  // --- Player state ---
-  const playerEl = (
-    <PlayerView
-      compiledProject={compiledProject}
-      compileError={compileError}
-      mergedProps={mergedProps}
-      meta={meta}
-      dark={dark}
-      isBusy={isBusy}
-      isFullscreen={isFullscreen}
-      canFullscreen={canFullscreen}
-      onToggleFullscreen={toggleFullscreen}
-      loadingWord={loadingWord}
-      loadingVisible={loadingVisible}
-      onPlayerError={handlePlayerError}
-    />
-  );
-
-  if (isFullscreen) {
-    const aspectRatio = meta.width / meta.height;
-    return (
-      <div
-        style={{
-          width: "100vw",
-          height: "100vh",
-          padding: 12,
-          boxSizing: "border-box",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: "#000",
-        }}
-      >
-        <div style={{ width: "100%", maxWidth: `calc((100vh - 24px) * ${aspectRatio})` }}>
-          {playerEl}
+  return (
+    <div style={{ fontFamily: "system-ui, sans-serif" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta.title}</div>
+          <div style={{ fontSize: 11, opacity: 0.55 }}>
+            {data.projectId ? `${data.projectId.slice(0, 8)} · ` : ""}rev {data.revision ?? "?"} · {meta.width}×{meta.height} · {meta.fps}fps · {meta.durationInFrames}f
+          </div>
         </div>
+        {canAppFullscreen || canNativeFullscreen ? <button onClick={toggleFullscreen}>{fullscreen ? "Exit fullscreen" : "Fullscreen"}</button> : null}
       </div>
-    );
-  }
-
-  return playerEl;
+      <ErrorBoundary onError={setPlayerError}>
+        <div ref={playerContainerRef} style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "#000" }}>
+          <Player
+            component={compiledProject.component as any}
+            inputProps={mergedProps}
+            durationInFrames={meta.durationInFrames}
+            fps={meta.fps}
+            compositionWidth={meta.width}
+            compositionHeight={meta.height}
+            controls
+            autoPlay
+            loop
+            style={{ width: "100%", maxWidth: "100%", margin: 0 }}
+          />
+          {isBusy ? (
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(0,0,0,.45)", backdropFilter: "blur(8px)", color: "white", pointerEvents: "none" }}>
+              Updating preview…
+            </div>
+          ) : null}
+        </div>
+      </ErrorBoundary>
+    </div>
+  );
 }
 
-// ---------------------------------------------------------------------------
-// Export with error boundary + theme provider
-// ---------------------------------------------------------------------------
-
 export default function RemotionPlayerWidget() {
-  return (
-    <ThemeProvider>
-      <WidgetErrorBoundary>
-        <RemotionPlayerWidgetInner />
-      </WidgetErrorBoundary>
-    </ThemeProvider>
-  );
+  return <RemotionPlayerWidgetInner />;
 }

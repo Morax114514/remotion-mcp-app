@@ -1,190 +1,89 @@
-import { MCPServer } from "mcp-use";
-import { z } from "zod";
-import { observeMcpToolCall, posthog } from "./observability.js";
-import { RULE_INDEX } from "./rules/index.js";
-import { RULE_REACT_CODE } from "./rules/react-code.js";
-import { RULE_REMOTION_ANIMATIONS } from "./rules/remotion-animations.js";
-import { RULE_REMOTION_TIMING } from "./rules/remotion-timing.js";
-import { RULE_REMOTION_SEQUENCING } from "./rules/remotion-sequencing.js";
-import { RULE_REMOTION_TRANSITIONS } from "./rules/remotion-transitions.js";
-import { RULE_REMOTION_TEXT_ANIMATIONS } from "./rules/remotion-text-animations.js";
-import { RULE_REMOTION_TRIMMING } from "./rules/remotion-trimming.js";
-import {
-  DEFAULT_META,
-  compileAndRespondWithProject,
-  failProject,
-  formatZodIssues,
-  getSessionProject,
-} from "./utils.js";
+import {MCPServer} from "mcp-use";
+import {z} from "zod";
+import fs from "node:fs/promises";
+import {createReadStream} from "node:fs";
+import {createRequire} from "node:module";
+import {Readable} from "node:stream";
+import {getCapabilityReport} from "./capabilities.js";
+import {compileProjectBundle, normalizeVirtualPath} from "./compiler.js";
+import {projectStore} from "./project-store.js";
+import {assetStore, normalizeAssetPath} from "./asset-store.js";
+import {getOutput, outputDirectory, outputUrl, registerOutput} from "./output-store.js";
+import {prepareRenderProject, renderProjectStills, renderProjectVideo} from "./render-executor.js";
+import * as Rules from "./rules/index.js";
+import {DEFAULT_META, compileAndRespondWithProject, failProject, formatZodIssues, getSessionProject, saveSessionProject, sessionIdFromContext} from "./utils.js";
 
-const server = new MCPServer({
-  name: "remotion-mcp",
-  title: "Remotion Video Creator",
-  version: "2.0.0",
-  host: "0.0.0.0",
-  description:
-    "Create Remotion videos from multi-file React projects with props-first composition design.",
+const require=createRequire(import.meta.url);
+const CANVASKIT_JS=require.resolve("canvaskit-wasm/bin/full/canvaskit.js");
+const CANVASKIT_WASM=require.resolve("canvaskit-wasm/bin/full/canvaskit.wasm");
+
+const server=new MCPServer({name:"remotion-ultimate-mcp",title:"Remotion Ultimate",version:"0.1.0",host:"0.0.0.0",description:"Remotion 4.0.507 live ChatGPT Player + shared-source full render runtime."});
+const text=(name:string,description:string,value:string)=>server.tool({name,description},async()=>({content:[{type:"text" as const,text:value}]}));
+
+export const readMe=text("read_me","IMPORTANT: Call FIRST for real Remotion work.",Rules.RULE_INDEX);
+export const ruleReactCode=text("rule_react_code","React/project structure",Rules.RULE_REACT_CODE);
+export const ruleRemotionAnimations=text("rule_remotion_animations","Frame-driven animation",Rules.RULE_REMOTION_ANIMATIONS);
+export const ruleRemotionTiming=text("rule_remotion_timing","Timing and easing",Rules.RULE_REMOTION_TIMING);
+export const ruleRemotionSequencing=text("rule_remotion_sequencing","Sequence/Series timing",Rules.RULE_REMOTION_SEQUENCING);
+export const ruleRemotionTransitions=text("rule_remotion_transitions","Transitions",Rules.RULE_REMOTION_TRANSITIONS);
+export const ruleRemotionTextAnimations=text("rule_remotion_text_animations","Typography motion",Rules.RULE_REMOTION_TEXT_ANIMATIONS);
+export const ruleRemotionTrimming=text("rule_remotion_trimming","Trimming",Rules.RULE_REMOTION_TRIMMING);
+export const ruleDirectorQuality=text("rule_director_quality","Director and visual quality gate",Rules.RULE_DIRECTOR_QUALITY);
+export const ruleGraphicsRuntime=text("rule_graphics_runtime","TRUE 3D, Skia, WebGL/WebGPU verification",Rules.RULE_GRAPHICS_RUNTIME);
+export const ruleMediaAssets=text("rule_media_assets","Asset/media workflow",Rules.RULE_MEDIA_ASSETS);
+export const ruleUltimateCapabilities=text("rule_ultimate_capabilities","Ultimate capability boundaries",Rules.RULE_ULTIMATE_CAPABILITIES);
+
+export const getCapabilities=server.tool({name:"get_capabilities",description:"Return runtime capability map."},async()=>({content:[{type:"text" as const,text:JSON.stringify(getCapabilityReport(),null,2)}],structuredContent:{capabilities:getCapabilityReport()}}));
+
+const projectSchema=z.object({
+ title:z.string().optional().default(DEFAULT_META.title),compositionId:z.string().optional().default(DEFAULT_META.compositionId),
+ width:z.number().optional().default(DEFAULT_META.width),height:z.number().optional().default(DEFAULT_META.height),fps:z.number().optional().default(DEFAULT_META.fps),durationInFrames:z.number().optional().default(DEFAULT_META.durationInFrames),
+ entryFile:z.string().optional().default("/src/Video.tsx"),files:z.record(z.string(),z.string()),defaultProps:z.record(z.string(),z.unknown()).optional().default({}),inputProps:z.record(z.string(),z.unknown()).optional().default({})
+});
+const createSchema=z.object({
+ files:z.string().describe('JSON string of {path: code}. Changed files merge into the current project.'),deleteFiles:z.array(z.string()).optional(),entryFile:z.string().optional(),title:z.string().optional(),compositionId:z.string().optional(),
+ durationInFrames:z.number().positive().optional(),fps:z.number().positive().optional(),width:z.number().positive().optional(),height:z.number().positive().optional(),defaultProps:z.record(z.string(),z.unknown()).optional(),inputProps:z.record(z.string(),z.unknown()).optional()
+});
+const videoOut=z.object({videoProject:z.string()});
+
+export const createVideo=server.tool({
+ name:"create_video",description:"Create/patch the current multi-file project and mount/update its live Player.",inputSchema:createSchema,outputSchema:videoOut,
+ view:{name:"remotion-player",description:"Interactive Remotion video player",prefersBorder:false,csp:{resourceDomains:["https://images.unsplash.com","https://picsum.photos"]}}
+},async(raw:z.infer<typeof createSchema>,ctx)=>{
+ const sessionId=sessionIdFromContext(ctx); let changed:Record<string,string>;
+ try{const p=JSON.parse(raw.files);if(!p||typeof p!=="object"||Array.isArray(p))return failProject("files must be a JSON object");changed=p;}catch{return failProject("files must be valid JSON");}
+ if(!Object.keys(changed).length&&!raw.deleteFiles?.length)return failProject("Provide changed files or deleteFiles.");
+ const prev=await getSessionProject(sessionId);const files=prev?{...prev.files,...changed}:{...changed};for(const p of raw.deleteFiles??[])delete files[normalizeVirtualPath(p)];
+ const parsed=projectSchema.safeParse({title:raw.title??prev?.title,compositionId:raw.compositionId??prev?.compositionId,width:raw.width??prev?.width,height:raw.height??prev?.height,fps:raw.fps??prev?.fps,durationInFrames:raw.durationInFrames??prev?.durationInFrames,entryFile:raw.entryFile??prev?.entryFile,files,defaultProps:raw.defaultProps??prev?.defaultProps,inputProps:raw.inputProps??prev?.inputProps});
+ if(!parsed.success)return failProject(`Invalid input: ${formatZodIssues(parsed.error)}`);
+ return compileAndRespondWithProject(parsed.data,sessionId,prev?["Merged with previous project."]:[],prev?"update_video":"create_video");
 });
 
-if (posthog) {
-  server.use("mcp:tools/call", observeMcpToolCall);
-}
+function need<T>(v:T|null):T{if(!v)throw new Error("No current project. Call create_video first.");return v;}
+async function current(ctx:any){return need(await getSessionProject(sessionIdFromContext(ctx)));}
+async function rewrite(ctx:any,mutate:(files:Record<string,string>)=>void){const p=await current(ctx);const files={...p.files};mutate(files);const parsed=projectSchema.parse({...p,files});return compileAndRespondWithProject(parsed,sessionIdFromContext(ctx),["Project source updated."],"update_video");}
 
-process.on("SIGTERM", async () => {
-  if (posthog) await posthog.shutdown();
-  process.exit(0);
-});
+export const listProjectFiles=server.tool({name:"list_project_files",description:"List current project files."},async(_p,ctx)=>{const p=await current(ctx);const files=Object.keys(p.files).sort();return{content:[{type:"text" as const,text:files.join("\n")}],structuredContent:{projectId:p.projectId,revision:p.revision,files}};});
+export const readProjectFile=server.tool({name:"read_project_file",description:"Read a source file.",inputSchema:z.object({path:z.string()})},async({path},ctx)=>{const p=await current(ctx);const n=normalizeVirtualPath(path);if(typeof p.files[n]!=="string")throw new Error(`File not found: ${n}`);return{content:[{type:"text" as const,text:p.files[n]}],structuredContent:{path:n,revision:p.revision}};});
+export const writeProjectFile=server.tool({name:"write_project_file",description:"Create or fully replace one source file.",inputSchema:z.object({path:z.string(),content:z.string()})},async({path,content},ctx)=>{const n=normalizeVirtualPath(path);return rewrite(ctx,f=>{f[n]=content;});});
+export const replaceProjectFile=server.tool({name:"replace_project_file",description:"Exact text replacement in one source file.",inputSchema:z.object({path:z.string(),oldText:z.string(),newText:z.string(),replaceAll:z.boolean().optional().default(false)})},async({path,oldText,newText,replaceAll},ctx)=>{const n=normalizeVirtualPath(path);return rewrite(ctx,f=>{const s=f[n];if(typeof s!=="string")throw new Error(`File not found: ${n}`);if(!s.includes(oldText))throw new Error("oldText not found");f[n]=replaceAll?s.split(oldText).join(newText):s.replace(oldText,newText);});});
+export const deleteProjectFile=server.tool({name:"delete_project_file",description:"Delete one source file.",inputSchema:z.object({path:z.string()})},async({path},ctx)=>{const n=normalizeVirtualPath(path);return rewrite(ctx,f=>{if(!(n in f))throw new Error(`File not found: ${n}`);delete f[n];});});
 
-// --- Rule tools ---
+export const uploadAsset=server.tool({name:"upload_asset",description:"Store binary/media/model/font asset for the current project.",inputSchema:z.object({path:z.string(),dataBase64:z.string(),contentType:z.string().optional()})},async({path,dataBase64,contentType},ctx)=>{const p=await current(ctx);const n=normalizeAssetPath(path);const data=Buffer.from(dataBase64,"base64");if(!data.length)throw new Error("Empty asset");const asset=await assetStore.put(p.projectId,n,data,contentType);return{content:[{type:"text" as const,text:`Stored ${asset.path} (${asset.size} bytes). Use staticFile(${JSON.stringify(asset.path)}).`}],structuredContent:{asset}};});
+export const listAssets=server.tool({name:"list_assets",description:"List current project assets."},async(_p,ctx)=>{const p=await current(ctx);const assets=await assetStore.list(p.projectId);return{content:[{type:"text" as const,text:JSON.stringify(assets,null,2)}],structuredContent:{assets}};});
+export const deleteAsset=server.tool({name:"delete_asset",description:"Delete one project asset.",inputSchema:z.object({path:z.string()})},async({path},ctx)=>{const p=await current(ctx);const n=normalizeAssetPath(path);if(!await assetStore.delete(p.projectId,n))throw new Error(`Asset not found: ${n}`);return{content:[{type:"text" as const,text:`Deleted ${n}.`}]};});
 
-export const readMe = server.tool(
-  { name: "read_me", description: "IMPORTANT: Call this FIRST. Returns the guide overview and lists all available rule tools." },
-  async () => ({ content: [{ type: "text", text: RULE_INDEX }] })
-);
+export const validateProject=server.tool({name:"validate_project",description:"Validate preview, render, or both executors.",inputSchema:z.object({executor:z.enum(["preview","render","both"]).optional().default("preview")})},async({executor},ctx)=>{const p=await current(ctx);const lines=[] as string[];if(executor!=="render"){const r=await compileProjectBundle(p.files,p.entryFile);lines.push(`Preview VALID: ${Object.keys(r.normalizedFiles).length} files.`);}if(executor!=="preview"){const r=await prepareRenderProject(p);try{lines.push(`Render VALID: ${r.composition.id} ${r.composition.width}x${r.composition.height} ${r.composition.fps}fps ${r.composition.durationInFrames}f GL=${r.gl??"default"}.`);}finally{await r.cleanup();}}return{content:[{type:"text" as const,text:[`VALID ${p.projectId} r${p.revision}`,...lines].join("\n")}],structuredContent:{valid:true,executor,projectId:p.projectId,revision:p.revision}};});
+export const listCompositions=server.tool({name:"list_compositions",description:"Resolve current composition through Render Executor."},async(_p,ctx)=>{const p=await current(ctx);const r=await prepareRenderProject(p);try{const c=r.composition;const composition={id:c.id,width:c.width,height:c.height,fps:c.fps,durationInFrames:c.durationInFrames,gl:r.gl??"default"};return{content:[{type:"text" as const,text:JSON.stringify(composition,null,2)}],structuredContent:{compositions:[composition]}};}finally{await r.cleanup();}});
 
-export const ruleReactCode = server.tool(
-  { name: "rule_react_code", description: "Project code reference: file structure, supported imports, component/props patterns" },
-  async () => ({ content: [{ type: "text", text: RULE_REACT_CODE }] })
-);
+export const renderStillTool=server.tool({name:"render_still",description:"Render one real PNG still.",inputSchema:z.object({frame:z.number().nonnegative().optional().default(0)})},async({frame},ctx)=>{const p=await current(ctx);const [s]=await renderProjectStills(p,[frame],outputDirectory());const o=await registerOutput(s.outputPath,s.contentType);return{content:[{type:"text" as const,text:`Frame ${s.frame} GL=${s.gl??"default"}: ${outputUrl(o)}`},{type:"image" as const,data:s.buffer.toString("base64"),mimeType:s.contentType}],structuredContent:{frame:s.frame,gl:s.gl??"default",outputId:o.id,url:outputUrl(o)}};});
+export const renderStillsTool=server.tool({name:"render_stills",description:"Render representative PNG stills for visual review.",inputSchema:z.object({frames:z.array(z.number().nonnegative()).min(1).max(12)})},async({frames},ctx)=>{const p=await current(ctx);const stills=await renderProjectStills(p,frames,outputDirectory());const content:any[]=[];const outputs:any[]=[];for(const s of stills){const o=await registerOutput(s.outputPath,s.contentType);content.push({type:"text",text:`Frame ${s.frame} GL=${s.gl??"default"}: ${outputUrl(o)}`},{type:"image",data:s.buffer.toString("base64"),mimeType:s.contentType});outputs.push({frame:s.frame,gl:s.gl??"default",outputId:o.id,url:outputUrl(o)});}return{content,structuredContent:{outputs}};});
+export const renderVideoTool=server.tool({name:"render_video",description:"Render real H.264/H.265/VP8/VP9/ProRes media.",inputSchema:z.object({codec:z.enum(["h264","h265","vp8","vp9","prores"]).optional().default("h264"),crf:z.number().min(0).max(63).optional(),concurrency:z.union([z.number().positive(),z.string()]).optional()})},async({codec,crf,concurrency},ctx)=>{const p=await current(ctx);const r=await renderProjectVideo(p,outputDirectory(),{codec,crf,concurrency});const o=await registerOutput(r.outputPath,r.contentType);return{content:[{type:"text" as const,text:`Rendered ${codec} GL=${r.gl??"default"}: ${outputUrl(o)}`}],structuredContent:{gl:r.gl??"default",outputId:o.id,fileName:o.fileName,contentType:o.contentType,url:outputUrl(o)}};});
+export const resetProject=server.tool({name:"reset_project",description:"Destructively reset current project and assets."},async(_p,ctx)=>{const id=sessionIdFromContext(ctx);const p=await getSessionProject(id);await projectStore.delete(id);if(p)await assetStore.purgeProject(p.projectId);return{content:[{type:"text" as const,text:"Project reset."}]};});
 
-export const ruleRemotionAnimations = server.tool(
-  { name: "rule_remotion_animations", description: "Remotion animations: useCurrentFrame, frame-driven animation fundamentals" },
-  async () => ({ content: [{ type: "text", text: RULE_REMOTION_ANIMATIONS }] })
-);
-
-export const ruleRemotionTiming = server.tool(
-  { name: "rule_remotion_timing", description: "Remotion timing: interpolate, spring, Easing, spring configs, delay, duration" },
-  async () => ({ content: [{ type: "text", text: RULE_REMOTION_TIMING }] })
-);
-
-export const ruleRemotionSequencing = server.tool(
-  { name: "rule_remotion_sequencing", description: "Remotion sequencing: Sequence, delay, nested timing, local frames" },
-  async () => ({ content: [{ type: "text", text: RULE_REMOTION_SEQUENCING }] })
-);
-
-export const ruleRemotionTransitions = server.tool(
-  { name: "rule_remotion_transitions", description: "Remotion transitions: TransitionSeries, fade, slide, wipe, flip, duration calculation" },
-  async () => ({ content: [{ type: "text", text: RULE_REMOTION_TRANSITIONS }] })
-);
-
-export const ruleRemotionTextAnimations = server.tool(
-  { name: "rule_remotion_text_animations", description: "Remotion text: typewriter effect, word highlighting, string slicing" },
-  async () => ({ content: [{ type: "text", text: RULE_REMOTION_TEXT_ANIMATIONS }] })
-);
-
-export const ruleRemotionTrimming = server.tool(
-  { name: "rule_remotion_trimming", description: "Remotion trimming: cut start/end of animations with negative Sequence from" },
-  async () => ({ content: [{ type: "text", text: RULE_REMOTION_TRIMMING }] })
-);
-
-// --- Video tool ---
-
-const projectVideoSchema = z.object({
-  title: z.string().optional().default(DEFAULT_META.title),
-  compositionId: z.string().optional().default(DEFAULT_META.compositionId),
-  width: z.number().optional().default(DEFAULT_META.width),
-  height: z.number().optional().default(DEFAULT_META.height),
-  fps: z.number().optional().default(DEFAULT_META.fps),
-  durationInFrames: z.number().optional().default(DEFAULT_META.durationInFrames),
-  entryFile: z.string().optional().default("/src/Video.tsx"),
-  files: z.record(z.string(), z.string()),
-  defaultProps: z.record(z.string(), z.unknown()).optional().default({}),
-  inputProps: z.record(z.string(), z.unknown()).optional().default({}),
-});
-
-const createVideoSchema = z.object({
-  files: z.string().describe(
-    'REQUIRED. A JSON string of {path: code} mapping file paths to source code. Example: \'{"\/src\/Video.tsx":"import {AbsoluteFill} from \\"remotion\\";\\nexport default function Video(){return <AbsoluteFill\/>;}"}\'. For edits, only include changed files — unchanged files are kept from the previous call.'
-  ),
-  entryFile: z.string().optional().describe('Entry file path (default: "/src/Video.tsx"). Must match a key in files.'),
-  title: z.string().optional().describe("Title shown in the video player"),
-  durationInFrames: z.number().optional().describe("Total duration in frames (default: 150)"),
-  fps: z.number().optional().describe("Frames per second (default: 30)"),
-  width: z.number().optional().describe("Width in pixels (default: 1920)"),
-  height: z.number().optional().describe("Height in pixels (default: 1080)"),
-});
-
-const createVideoOutputSchema = z.object({
-  videoProject: z.string().describe("Serialized compiled Remotion project consumed by the player view"),
-});
-
-export const createVideo = server.tool(
-  {
-    name: "create_video",
-    description:
-      "Create or update a video. The `files` param is a JSON string (not an object) mapping file paths to source code. " +
-      'Pass it as: files: JSON.stringify({"/src/Video.tsx": "...your code..."}). ' +
-      "For edits, only include changed files — previous files are preserved automatically.",
-    inputSchema: createVideoSchema,
-    outputSchema: createVideoOutputSchema,
-    view: {
-      name: "remotion-player",
-      description: "Interactive Remotion video player",
-      prefersBorder: false,
-      csp: {
-        resourceDomains: ["https://images.unsplash.com", "https://picsum.photos"],
-      },
-    },
-  },
-  async (rawParams: z.infer<typeof createVideoSchema>, ctx) => {
-    const caller = ctx.client.user();
-    const sessionId =
-      caller?.conversationId ??
-      caller?.subject ??
-      ctx.request?.header("mcp-session-id") ??
-      "anonymous";
-
-    // Parse files from JSON string
-    let files: Record<string, string>;
-    try {
-      const parsed = JSON.parse(rawParams.files);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return failProject('files must be a JSON object like {"\/src\/Video.tsx": "...code..."}');
-      }
-      files = parsed as Record<string, string>;
-    } catch {
-      return failProject('files must be a valid JSON string, e.g. \'{"\/src\/Video.tsx":"...code..."}\'');
-    }
-
-    if (Object.keys(files).length === 0) {
-      return failProject('files must contain at least one file entry.');
-    }
-
-    // Merge with previous session state (if any)
-    const previous = getSessionProject(sessionId);
-    const mergedFiles = previous
-      ? { ...previous.files, ...files }
-      : files;
-
-    const project = {
-      title: rawParams.title ?? previous?.title,
-      compositionId: previous?.compositionId,
-      width: rawParams.width ?? previous?.width,
-      height: rawParams.height ?? previous?.height,
-      fps: rawParams.fps ?? previous?.fps,
-      durationInFrames: rawParams.durationInFrames ?? previous?.durationInFrames,
-      entryFile: rawParams.entryFile ?? previous?.entryFile,
-      files: mergedFiles,
-      defaultProps: previous?.defaultProps,
-      inputProps: previous?.inputProps,
-    };
-
-    const parseResult = projectVideoSchema.safeParse(project);
-    if (!parseResult.success) {
-      return failProject(`Invalid input: ${formatZodIssues(parseResult.error)}`);
-    }
-
-    const statusLines: string[] = [];
-    if (previous) {
-      statusLines.push("Merged with previous project.");
-    }
-
-    return compileAndRespondWithProject(parseResult.data, sessionId, statusLines, "create_video");
-  }
-);
-
-server.get("/.well-known/openai-apps-challenge", (c) => {
-  return c.text("gP0NHv0ywqzsT3-iJ5is_xR6HysaW9Gbls7TeneGl8M");
-});
-
+server.get("/project-assets/:projectId/*",async c=>{try{const a=await assetStore.get(c.req.param("projectId"),c.req.param("*") ?? "");if(!a)return c.text("Not found",404);return new Response(Readable.toWeb(createReadStream(a.filePath)) as ReadableStream,{headers:{"Content-Type":a.contentType,"Content-Length":String(a.size),ETag:`\"${a.sha256}\"`,"Cache-Control":"private, max-age=3600"}});}catch(e){return c.text((e as Error).message,400);}});
+server.get("/canvaskit.js",async c=>c.body(new Uint8Array(await fs.readFile(CANVASKIT_JS)),200,{"Content-Type":"text/javascript; charset=utf-8","Cache-Control":"public, max-age=31536000, immutable"}));
+server.get("/canvaskit.wasm",async c=>c.body(new Uint8Array(await fs.readFile(CANVASKIT_WASM)),200,{"Content-Type":"application/wasm","Cache-Control":"public, max-age=31536000, immutable"}));
+server.get("/renders/:id/:filename",async c=>{const o=getOutput(c.req.param("id"));if(!o)return c.text("Not found",404);try{return c.body(new Uint8Array(await fs.readFile(o.filePath)),200,{"Content-Type":o.contentType,"Content-Disposition":`inline; filename=\"${o.fileName.replace(/\"/g,"")}\"`,"Cache-Control":"private, max-age=3600"});}catch{return c.text("Unavailable",404);}});
+server.get("/.well-known/openai-apps-challenge",c=>c.text("remotion-ultimate-mcp-app"));
 export default server;
