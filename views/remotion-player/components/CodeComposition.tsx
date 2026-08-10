@@ -57,9 +57,11 @@ let canvasKitScriptPromise: Promise<void> | null = null;
 
 function setPreviewStaticBase(projectId?: string): void {
   const root = window as McpWindow;
-  root.remotion_staticBase = projectId
-    ? `${serverBaseUrl()}/project-assets/${encodeURIComponent(projectId)}`
-    : undefined;
+  if (projectId) {
+    root.remotion_staticBase = `${serverBaseUrl()}/project-assets/${encodeURIComponent(projectId)}`;
+  } else {
+    delete root.remotion_staticBase;
+  }
 }
 
 function loadCanvasKitScript(): Promise<void> {
