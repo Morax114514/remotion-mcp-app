@@ -1,6 +1,5 @@
 import React, { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import {
-  McpUseProvider,
   useCallTool,
   useDisplayMode,
   useSendFollowUp,
@@ -221,7 +220,7 @@ function RemotionPlayerWidgetInner() {
   const canNativeFullscreen = typeof document !== "undefined" && typeof document.documentElement?.requestFullscreen === "function";
   const toggleFullscreen = useCallback(() => {
     if (canAppFullscreen) {
-      requestDisplayMode(appFullscreen ? "inline" : "fullscreen");
+      requestDisplayMode({ mode: appFullscreen ? "inline" : "fullscreen" });
       return;
     }
     if (!canNativeFullscreen) return;
@@ -283,9 +282,5 @@ function RemotionPlayerWidgetInner() {
 }
 
 export default function RemotionPlayerWidget() {
-  return (
-    <McpUseProvider autoSize>
-      <RemotionPlayerWidgetInner />
-    </McpUseProvider>
-  );
+  return <RemotionPlayerWidgetInner />;
 }
