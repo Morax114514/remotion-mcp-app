@@ -1,6 +1,6 @@
 {
   "name": "remotion-ultimate-mcp-app",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Full Remotion 4.0.507 MCP App: ChatGPT live Player preview + full server-side render/runtime capability from Remotion Ultimate Portable.",
